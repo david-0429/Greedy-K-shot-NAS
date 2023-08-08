@@ -28,10 +28,16 @@ class ShuffleNetV2_OneShot(nn.Module):
             output_channel = self.stage_out_channels[idxstage + 2]
 
             for i in range(numrepeat):
-                if i == 0:
-                    inp, outp, stride = input_channel, output_channel, 2
+                if idxstage <= 1:
+                    if i == 0:
+                        inp, outp, stride = input_channel, output_channel, 1
+                    else:
+                        inp, outp, stride = input_channel // 2, output_channel, 1
                 else:
-                    inp, outp, stride = input_channel // 2, output_channel, 1
+                    if i == 0:
+                        inp, outp, stride = input_channel, output_channel, 2
+                    else:
+                        inp, outp, stride = input_channel // 2, output_channel, 1
 
                 base_mid_channels = outp // 2
                 mid_channels = int(base_mid_channels)
