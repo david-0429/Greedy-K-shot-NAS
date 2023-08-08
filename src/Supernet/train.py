@@ -12,6 +12,7 @@ from PIL import Image
 import time
 import logging
 import argparse
+import wandb
 from network import ShuffleNetV2_OneShot
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters
 from flops import get_cand_flops
@@ -102,6 +103,18 @@ def main():
     if torch.cuda.is_available():
         use_gpu = True
 
+    #wandb init
+    print("wandb init")
+    def get_timestamp():
+        return datetime.now().strftime("%b%d_%H-%M-%S")
+  
+    wandb.init(
+    # Set the project where this run will be logged
+    project="Greedy K-shot NAS superent", 
+    name=f"CIFAR10_{args.batch-size}_{args.learning-rate}-{get_timestamp()}"
+    )
+
+    #dataset
     train_transformer = transforms.Compose([
             transforms.Resize((32, 32)),
             transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
@@ -207,6 +220,8 @@ def main():
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
+    wandb.finish()
+
 def adjust_bn_momentum(model, iters):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
@@ -269,6 +284,15 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
                         'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
                         'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
             logging.info(printInfo)
+
+            wandb.log({
+              "Top-1 train_err": Top1_err / args.display_interval,
+              "Top-5 train_err": Top5_err / args.display_interval,
+              "train_loss": loss.item(),
+              "lr": scheduler.get_lr()[0],
+              "train_iter": all_iters
+              })
+
             t1 = time.time()
             Top1_err, Top5_err = 0.0, 0.0
 
@@ -310,6 +334,14 @@ def validate(model, device, args, *, all_iters=None):
               'Top-5 err = {:.6f},\t'.format(1 - top5.avg / 100) + \
               'val_time = {:.6f}'.format(time.time() - t1)
     logging.info(logInfo)
+
+    wandb.log({
+              "Top-1 val_err": 1 - top1.avg / 100,
+              "Top-5 val_err": 1 - top5.avg / 100,
+              "val_loss": objs.avg,
+              "lr": scheduler.get_lr()[0],
+              "val_iter": all_iters
+              })
 
 
 if __name__ == "__main__":
