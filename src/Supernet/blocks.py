@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import pdb
 
 
 class Shufflenet(nn.Module):
@@ -49,6 +50,7 @@ class Shufflenet(nn.Module):
 
     def forward(self, old_x):
         if self.stride == 1:
+            pdb.set_trace()
             x_proj, x = channel_shuffle(old_x)
             return torch.cat((x_proj, self.branch_main(x)), 1)
         elif self.stride == 2:
@@ -122,9 +124,11 @@ class Shuffle_Xception(nn.Module):
 
 
 def channel_shuffle(x):
+    pdb.set_trace()
     batchsize, num_channels, height, width = x.data.size()
     assert (num_channels % 4 == 0)
     x = x.reshape(batchsize * num_channels // 2, 2, height * width)
+    
     x = x.permute(1, 0, 2)
     x = x.reshape(2, -1, num_channels // 2, height, width)
     return x[0], x[1]
