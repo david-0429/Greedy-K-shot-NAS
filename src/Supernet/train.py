@@ -111,7 +111,7 @@ def main():
     wandb.init(
     # Set the project where this run will be logged
     project="Greedy K-shot NAS superent", 
-    name=f"CIFAR10_{args.batch-size}_{args.learning-rate}-{get_timestamp()}"
+    name=f"CIFAR10_{args.batch-size}_{args.learning-rate}_{args.total-iters}_{get_timestamp()}"
     )
 
     #dataset
