@@ -50,7 +50,7 @@ class Shufflenet(nn.Module):
 
     def forward(self, old_x):
         if self.stride == 1:
-            pdb.set_trace()
+            #pdb.set_trace()
             x_proj, x = channel_shuffle(old_x)
             return torch.cat((x_proj, self.branch_main(x)), 1)
         elif self.stride == 2:
