@@ -77,8 +77,8 @@ def get_args():
     parser.add_argument('--val-interval', type=int, default=10000, help='report frequency')
     parser.add_argument('--save-interval', type=int, default=10000, help='report frequency')
 
-    parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
-    parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
+    #parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
+    #parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
 
     args = parser.parse_args()
     return args
@@ -102,6 +102,32 @@ def main():
     if torch.cuda.is_available():
         use_gpu = True
 
+    train_transformer = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.ToTensor(),
+        ])
+    
+    val_transformer = transforms.Compose([
+            transforms.Resize((32, 32)),
+            transforms.ToTensor(),
+        ])
+
+    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=train_transformer)
+    validation_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=val_transformer)
+
+    train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=1, pin_memory=use_gpu)
+    train_dataprovider = DataIterator(train_loader)
+
+    val_loader = torch.utils.data.DataLoader(
+        dataset=validation_dataset, batch_size=200, shuffle=False, 
+        num_workers=1, pin_memory=use_gpu)
+    val_dataprovider = DataIterator(val_loader)
+
+    '''
     assert os.path.exists(args.train_dir)
     train_dataset = datasets.ImageFolder(
         args.train_dir,
@@ -128,6 +154,7 @@ def main():
         num_workers=1, pin_memory=use_gpu
     )
     val_dataprovider = DataIterator(val_loader)
+    '''
     print('load data successfully')
 
     model = ShuffleNetV2_OneShot()
