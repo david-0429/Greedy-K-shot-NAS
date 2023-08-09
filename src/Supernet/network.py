@@ -5,7 +5,7 @@ from blocks import Shufflenet, Shuffle_Xception
 
 class ShuffleNetV2_OneShot(nn.Module):
 
-    def __init__(self, input_size=224, n_class=1000):
+    def __init__(self, input_size=32, n_class=10):
         super(ShuffleNetV2_OneShot, self).__init__()
 
         assert input_size % 32 == 0
