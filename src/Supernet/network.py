@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from blocks import Shufflenet, Shuffle_Xception
+import pdb
 
 
 class ShuffleNetV2_OneShot(nn.Module):
@@ -33,6 +34,11 @@ class ShuffleNetV2_OneShot(nn.Module):
                 else:
                     inp, outp, stride = input_channel // 2, output_channel, 1
 
+                if idxstage == 0 and 1:
+                    iteration = 0
+                elif idxstage == 2 and 3:
+                    iteration = 1
+
                 base_mid_channels = outp // 2
                 mid_channels = int(base_mid_channels)
                 archIndex += 1
@@ -41,19 +47,19 @@ class ShuffleNetV2_OneShot(nn.Module):
                     if blockIndex == 0:
                         print('Shuffle3x3')
                         self.features[-1].append(
-                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=3, stride=stride))
+                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=3, stride=stride, iteration=iteration))
                     elif blockIndex == 1:
                         print('Shuffle5x5')
                         self.features[-1].append(
-                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=5, stride=stride))
+                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=5, stride=stride, iteration=iteration))
                     elif blockIndex == 2:
                         print('Shuffle7x7')
                         self.features[-1].append(
-                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=7, stride=stride))
+                            Shufflenet(inp, outp, mid_channels=mid_channels, ksize=7, stride=stride, iteration=iteration))
                     elif blockIndex == 3:
                         print('Xception')
                         self.features[-1].append(
-                            Shuffle_Xception(inp, outp, mid_channels=mid_channels, stride=stride))
+                            Shuffle_Xception(inp, outp, mid_channels=mid_channels, stride=stride, iteration=iteration))
                     else:
                         raise NotImplementedError
                 input_channel = output_channel
@@ -68,7 +74,7 @@ class ShuffleNetV2_OneShot(nn.Module):
             nn.BatchNorm2d(self.stage_out_channels[-1], affine=False),
             nn.ReLU(inplace=True),
         )
-        self.globalpool = nn.AvgPool2d(7)
+        self.globalpool = nn.AvgPool2d(4)
         self.dropout = nn.Dropout(0.1)
         self.classifier = nn.Sequential(
             nn.Linear(self.stage_out_channels[-1], n_class, bias=False))
