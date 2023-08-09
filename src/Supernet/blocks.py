@@ -124,7 +124,7 @@ class Shuffle_Xception(nn.Module):
 
 
 def channel_shuffle(x):
-    pdb.set_trace()
+    #pdb.set_trace()
     batchsize, num_channels, height, width = x.data.size()
     assert (num_channels % 4 == 0)
     x = x.reshape(batchsize * num_channels // 2, 2, height * width)
