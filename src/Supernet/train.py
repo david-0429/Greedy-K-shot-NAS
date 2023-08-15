@@ -75,6 +75,8 @@ def get_args():
     parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
     parser.add_argument('--label-smooth', type=float, default=0.1, help='label smoothing')
 
+    parser.add_argument('--k', type=float, default=2, help='number of supernet')
+
     parser.add_argument('--auto-continue', type=bool, default=True, help='report frequency')
     parser.add_argument('--display-interval', type=int, default=20, help='report frequency')
     parser.add_argument('--val-interval', type=int, default=10000, help='report frequency')
@@ -172,10 +174,13 @@ def main():
     '''
     print('load data successfully')
 
-    for i in range(3):
-      locals()["model" + str(i)] = ShuffleNetV2_OneShot()
+    if args.k == 1:
+      model = ShuffleNetV2_OneShot()
+    else:
+      for i in range(args.k):
+        globals()["model" + str(i+1)] = ShuffleNetV2_OneShot()
 
-    model = ShuffleNetV2_K_Shot(model1, model2)
+      model = ShuffleNetV2_K_Shot(model1, model2)
     
 
     optimizer = torch.optim.SGD(get_parameters(model),
