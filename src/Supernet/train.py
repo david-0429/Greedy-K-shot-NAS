@@ -14,7 +14,8 @@ from datetime import datetime
 import logging
 import argparse
 import wandb
-from network import ShuffleNetV2_OneShot
+import pdb
+from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters
 from flops import get_cand_flops
 
@@ -171,7 +172,11 @@ def main():
     '''
     print('load data successfully')
 
-    model = ShuffleNetV2_OneShot()
+    for i in range(3):
+      locals()["model" + str(i)] = ShuffleNetV2_OneShot()
+
+    model = ShuffleNetV2_K_Shot(model1, model2)
+    
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
