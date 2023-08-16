@@ -3,6 +3,7 @@ import sys
 import torch
 import argparse
 import torch.nn as nn
+from torch.utils.data.dataset import IterableDataset
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import cv2
@@ -174,29 +175,47 @@ def main():
     '''
     print('load data successfully')
 
-    #model_list = []
+    model_list = []
+    args.optimizer = []
+    args.scheduler = []
     if args.k == 1:
       model = ShuffleNetV2_OneShot()
+
+      optimizer = torch.optim.SGD(get_parameters(model),
+                                lr=args.learning_rate,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
+
+      scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
+
+      args.optimizer = optimizer
+      args.scheduler = scheduler
+
     else:
       for i in range(args.k):
         globals()["model" + str(i+1)] = ShuffleNetV2_OneShot()
-        #model_list.append(globals()["model" + str(i+1)])
+        model_list.append(globals()["model" + str(i+1)])
 
         globals()["optimizer" + str(i+1)] = torch.optim.SGD(get_parameters( globals()["model" + str(i+1)]),
                                 lr=args.learning_rate,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(globals()["optimizer" + str(i+1)],
+        globals()["scheduler" + str(i+1)] = torch.optim.lr_scheduler.LambdaLR(globals()["optimizer" + str(i+1)],
                     lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
 
+        args.optimizer.append(globals()["optimizer" + str(i+1)])
+        args.scheduler.append(globals()["scheduler" + str(i+1)])
 
-      model = ShuffleNetV2_K_Shot(model1, model2)
+      model = ShuffleNetV2_K_Shot(model_list[0], model_list[1])
 
     criterion_smooth = CrossEntropyLabelSmooth(1000, 0.1)
 
     if use_gpu:
         model = nn.DataParallel(model)
+        model_list[0] = nn.DataParallel(model_list[0])
+        model_list[1] = nn.DataParallel(model_list[1])
         loss_function = criterion_smooth.cuda()
         device = torch.device("cuda")
     else:
@@ -204,6 +223,8 @@ def main():
         device = torch.device("cpu")
 
     model = model.to(device)
+    model_list[0] = model_list[0].to(device)
+    model_list[1] = model_list[1].to(device)
 
     all_iters = 0
     if args.auto_continue:
@@ -216,10 +237,8 @@ def main():
             for i in range(iters):
                 scheduler.step()
 
-    args.optimizer1 = optimizer1
-    args.optimizer2 = optimizer2
+
     args.loss_function = loss_function
-    args.scheduler = scheduler
     args.train_dataprovider = train_dataprovider
     args.val_dataprovider = val_dataprovider
 
@@ -231,7 +250,7 @@ def main():
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, model1, model2, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, model_list, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
@@ -242,25 +261,26 @@ def adjust_bn_momentum(model, iters):
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, model1, model2, device, args, *, val_interval, bn_process=False, all_iters=None):
-
-    optimizer1 = args.optimizer1
-    optimizer2 = args.optimizer2
-    loss_function = args.loss_function
+def train(model, model_list, device, args, *, val_interval, bn_process=False, all_iters=None):
+    
     scheduler = args.scheduler
+    optimizer = args.optimizer
+    loss_function = args.loss_function
     train_dataprovider = args.train_dataprovider
 
     t1 = time.time()
     Top1_err, Top5_err = 0.0, 0.0
 
-    model1.train()
-    model2.train()
+    model_list[0].train()
+    model_list[1].train()
     for iters in range(1, val_interval + 1):
-        scheduler.step()
+        scheduler[0].step()
+        scheduler[1].step()
         if bn_process:
-            adjust_bn_momentum(model, iters)
-            adjust_bn_momentum(model1, iters)
-            adjust_bn_momentum(model2, iters)
+            for model in model_list:
+              adjust_bn_momentum(model, iters)
+              adjust_bn_momentum(model_list[0], iters)
+              adjust_bn_momentum(model_list[1], iters)
 
         all_iters += 1
         d_st = time.time()
@@ -285,23 +305,23 @@ def train(model, model1, model2, device, args, *, val_interval, bn_process=False
 
         output = model(data, get_uniform_sample_cand())
         loss = loss_function(output, target)
-        optimizer1.zero_grad()
-        optimizer2.zero_grad()
+        optimizer[0].zero_grad()
+        optimizer[1].zero_grad()
         loss.backward()
 
         for p in model.parameters():
             if p.grad is not None and p.grad.sum() == 0:
                 p.grad = None
 
-        optimizer1.step()
-        optimizer2.step()
+        optimizer[0].step()
+        optimizer[1].step()
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
 
         Top1_err += 1 - prec1.item() / 100
         Top5_err += 1 - prec5.item() / 100
 
         if all_iters % args.display_interval == 0:
-            printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler.get_lr()[0], loss.item()) + \
+            printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler[0].get_lr()[0], loss.item()) + \
                         'Top-1 err = {:.6f},\t'.format(Top1_err / args.display_interval) + \
                         'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
                         'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
@@ -311,7 +331,7 @@ def train(model, model1, model2, device, args, *, val_interval, bn_process=False
               "Top-1 train_err": Top1_err / args.display_interval,
               "Top-5 train_err": Top5_err / args.display_interval,
               "train_loss": loss.item(),
-              "lr": scheduler.get_lr()[0],
+              "lr": scheduler[0].get_lr()[0],
               "train_iter": all_iters
               })
 
@@ -361,7 +381,6 @@ def validate(model, device, args, *, all_iters=None):
               "Top-1 val_err": 1 - top1.avg / 100,
               "Top-5 val_err": 1 - top5.avg / 100,
               "val_loss": objs.avg,
-              "lr": scheduler.get_lr()[0],
               "val_iter": all_iters
               })
 
