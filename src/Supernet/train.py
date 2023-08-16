@@ -75,7 +75,7 @@ def get_args():
     parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
     parser.add_argument('--label-smooth', type=float, default=0.1, help='label smoothing')
 
-    parser.add_argument('--k', type=float, default=2, help='number of supernet')
+    parser.add_argument('--k', type=int, default=2, help='number of supernet')
 
     parser.add_argument('--auto-continue', type=bool, default=True, help='report frequency')
     parser.add_argument('--display-interval', type=int, default=20, help='report frequency')
@@ -174,19 +174,25 @@ def main():
     '''
     print('load data successfully')
 
+    #model_list = []
     if args.k == 1:
       model = ShuffleNetV2_OneShot()
     else:
       for i in range(args.k):
         globals()["model" + str(i+1)] = ShuffleNetV2_OneShot()
+        #model_list.append(globals()["model" + str(i+1)])
 
-      model = ShuffleNetV2_K_Shot(model1, model2)
-    
-
-    optimizer = torch.optim.SGD(get_parameters(model),
+        globals()["optimizer" + str(i+1)] = torch.optim.SGD(get_parameters( globals()["model" + str(i+1)]),
                                 lr=args.learning_rate,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(globals()["optimizer" + str(i+1)],
+                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
+
+
+      model = ShuffleNetV2_K_Shot(model1, model2)
+
     criterion_smooth = CrossEntropyLabelSmooth(1000, 0.1)
 
     if use_gpu:
@@ -196,9 +202,6 @@ def main():
     else:
         loss_function = criterion_smooth
         device = torch.device("cpu")
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
 
     model = model.to(device)
 
@@ -213,7 +216,8 @@ def main():
             for i in range(iters):
                 scheduler.step()
 
-    args.optimizer = optimizer
+    args.optimizer1 = optimizer1
+    args.optimizer2 = optimizer2
     args.loss_function = loss_function
     args.scheduler = scheduler
     args.train_dataprovider = train_dataprovider
@@ -227,7 +231,7 @@ def main():
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, model1, model2, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
@@ -238,20 +242,25 @@ def adjust_bn_momentum(model, iters):
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, device, args, *, val_interval, bn_process=False, all_iters=None):
+def train(model, model1, model2, device, args, *, val_interval, bn_process=False, all_iters=None):
 
-    optimizer = args.optimizer
+    optimizer1 = args.optimizer1
+    optimizer2 = args.optimizer2
     loss_function = args.loss_function
     scheduler = args.scheduler
     train_dataprovider = args.train_dataprovider
 
     t1 = time.time()
     Top1_err, Top5_err = 0.0, 0.0
-    model.train()
+
+    model1.train()
+    model2.train()
     for iters in range(1, val_interval + 1):
         scheduler.step()
         if bn_process:
             adjust_bn_momentum(model, iters)
+            adjust_bn_momentum(model1, iters)
+            adjust_bn_momentum(model2, iters)
 
         all_iters += 1
         d_st = time.time()
@@ -276,14 +285,16 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
 
         output = model(data, get_uniform_sample_cand())
         loss = loss_function(output, target)
-        optimizer.zero_grad()
+        optimizer1.zero_grad()
+        optimizer2.zero_grad()
         loss.backward()
 
         for p in model.parameters():
             if p.grad is not None and p.grad.sum() == 0:
                 p.grad = None
 
-        optimizer.step()
+        optimizer1.step()
+        optimizer2.step()
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
 
         Top1_err += 1 - prec1.item() / 100
