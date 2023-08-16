@@ -125,7 +125,7 @@ class ShuffleNetV2_OneShot(nn.Module):
 
 class ShuffleNetV2_K_Shot(nn.Module):
 
-    def __init__(self, model1, model2, input_size=32, n_class=10):
+    def __init__(self, model1, model2, simplex_code, input_size=32, n_class=10):
         super(ShuffleNetV2_K_Shot, self).__init__()
 
         assert input_size % 32 == 0
@@ -202,7 +202,7 @@ class ShuffleNetV2_K_Shot(nn.Module):
 #---------------weight merge----------------------
 
         for p_out, p_in1, p_in2 in zip(self.parameters(), model1.parameters(), model2.parameters()):
-            p_out.data = nn.Parameter(p_in1 + p_in2);
+            p_out.data = nn.Parameter(p_in1 * simplex_code + p_in2 * simplex_code);
 
 #-------------------------------------------------
 
@@ -248,6 +248,25 @@ class ShuffleNetV2_K_Shot(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
+class simplex_net(nn.Module):
+
+    def __init__(self, architecture_input, channel_input):
+        super(simplex_net, self).__init__()
+        
+        self.fc1 = nn.Linear(architecture_input, 64, bias=True)
+        self.fc2 = nn.Linear(channel_input, 64, bias=True)
+        self.fc3 = nn.Linear(64, 128, bias=True)
+        self.softmax = nn.Softmax()
+
+    def forward(self, x, y):
+        x = self.fc1(x)
+        y = self.fc2(y)
+        z = x + y
+
+        z = self.fc3(z)
+        output = self.softmax(z)
+        return output
+        
 
 if __name__ == "__main__":
     # architecture = [0, 0, 3, 1, 1, 1, 0, 0, 2, 0, 2, 1, 1, 0, 2, 0, 2, 1, 3, 2]
