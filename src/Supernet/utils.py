@@ -2,6 +2,7 @@ import os
 import re
 import torch
 import torch.nn as nn
+import pdb
 
 
 class CrossEntropyLabelSmooth(nn.Module):
@@ -93,3 +94,29 @@ def get_parameters(model):
     groups = [dict(params=group_weight_decay), dict(
         params=group_no_weight_decay, weight_decay=0.)]
     return groups
+
+
+'''
+def k_update(model_list, mode):
+  # 0 : model.train()
+  if mode == "0":
+    for i in range(len(model_list)):
+      return model_list[i].train()
+  # 1 : adjust_bn_momentum(model, iters)
+  elif mode == "1":
+    for model in model_list:
+      return adjust_bn_momentum(model, iters)
+  # 2 : scheduler.step()
+  elif mode == "2":
+    for i in range(len(model_list)):
+      pdb.set_trace()
+      return model_list[i].step()
+  # 3 : optimizer.zero_grad()
+  elif mode == "3":
+    for i in range(len(model_list)):
+      return model_list[i].zero_grad()
+  # 4 : optimizer.step()
+  elif mode == "4":
+    for i in range(len(model_list)):
+      return model_list[i].step()
+'''
