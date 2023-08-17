@@ -95,6 +95,14 @@ def get_parameters(model):
         params=group_no_weight_decay, weight_decay=0.)]
     return groups
 
+def to_onehot(a):
+  a_one_hot = torch.nn.functional.one_hot(torch.tensor(a), num_classes=4)
+  #c_one_hot = torch.nn.functional.one_hot(torch.tensor(c), num_classes=4)
+
+  a_one_hot = a_one_hot.to(torch.float32)
+  #c_one_hot = c_one_hot.to(torch.float32)
+  return a_one_hot
+
 
 '''
 def k_update(model_list, mode):
