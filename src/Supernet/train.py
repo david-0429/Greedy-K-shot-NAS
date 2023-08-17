@@ -16,8 +16,8 @@ import logging
 import argparse
 import wandb
 import pdb
-from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot
-from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters
+from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, SimplexNet
+from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters, to_onehot
 from flops import get_cand_flops
 
 class OpencvResize(object):
@@ -145,6 +145,8 @@ def main():
         num_workers=1, pin_memory=use_gpu)
     val_dataprovider = DataIterator(val_loader)
 
+    pdb.set_trace()
+
     '''
     assert os.path.exists(args.train_dir)
     train_dataset = datasets.ImageFolder(
@@ -209,6 +211,7 @@ def main():
         args.scheduler.append(globals()["scheduler" + str(i+1)])
 
       model = ShuffleNetV2_K_Shot(model_list[0], model_list[1])
+      simplex_net = SimplexNet(4, 4, args.k)
 
     criterion_smooth = CrossEntropyLabelSmooth(1000, 0.1)
 
@@ -250,7 +253,7 @@ def main():
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, model_list, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, model_list, simplex_net, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
@@ -261,7 +264,7 @@ def adjust_bn_momentum(model, iters):
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, model_list, device, args, *, val_interval, bn_process=False, all_iters=None):
+def train(model, model_list, simplex_net, device, args, *, val_interval, bn_process=False, all_iters=None):
     
     scheduler = args.scheduler
     optimizer = args.optimizer
@@ -342,6 +345,28 @@ def train(model, model_list, device, args, *, val_interval, bn_process=False, al
             save_checkpoint({
                 'state_dict': model.state_dict(),
                 }, all_iters)
+        
+        #---------------train simplex-net------------------#
+
+        archi = get_uniform_sample_cand()
+        archi_onehot = to_onehot(archi)
+
+        code = simplex_net(archi_onehot)
+        model = model()
+        loss = loss_function(output, target)
+        optimizer[0].zero_grad()
+        optimizer[1].zero_grad()
+        loss.backward()
+
+        for p in model.parameters():
+            if p.grad is not None and p.grad.sum() == 0:
+                p.grad = None
+
+        optimizer[0].step()
+        optimizer[1].step()
+
+
+
 
     return all_iters
 
