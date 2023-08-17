@@ -125,7 +125,7 @@ class ShuffleNetV2_OneShot(nn.Module):
 
 class ShuffleNetV2_K_Shot(nn.Module):
 
-    def __init__(self, model1, model2, simplex_code, input_size=32, n_class=10):
+    def __init__(self, model1, model2, input_size=32, n_class=10):
         super(ShuffleNetV2_K_Shot, self).__init__()
 
         assert input_size % 32 == 0
@@ -202,7 +202,7 @@ class ShuffleNetV2_K_Shot(nn.Module):
 #---------------weight merge----------------------
 
         for p_out, p_in1, p_in2 in zip(self.parameters(), model1.parameters(), model2.parameters()):
-            p_out.data = nn.Parameter(p_in1 * simplex_code + p_in2 * simplex_code);
+            p_out.data = nn.Parameter(p_in1 + p_in2);
 
 #-------------------------------------------------
 
@@ -248,24 +248,25 @@ class ShuffleNetV2_K_Shot(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-class simplex_net(nn.Module):
-
-    def __init__(self, architecture_input, channel_input):
-        super(simplex_net, self).__init__()
+class SimplexNet(nn.Module):
+    def __init__(self, input_dim_arch, input_dim_channel, output_dim, hidden_dim=256):
+        super(SimplexNet, self).__init__()
+        self.fc_architecture = nn.Linear(input_dim_arch, hidden_dim)
+        self.fc_channel = nn.Linear(input_dim_channel, hidden_dim)
+        self.relu = nn.ReLU()
+        self.fc_output = nn.Linear(hidden_dim, output_dim)
+        self.softmax = nn.Softmax(dim=1)
         
-        self.fc1 = nn.Linear(architecture_input, 64, bias=True)
-        self.fc2 = nn.Linear(channel_input, 64, bias=True)
-        self.fc3 = nn.Linear(64, 128, bias=True)
-        self.softmax = nn.Softmax()
-
     def forward(self, x, y):
-        x = self.fc1(x)
-        y = self.fc2(y)
+        x = self.fc_architecture(x)
+        y = self.fc_channel(y)
+
         z = x + y
 
-        z = self.fc3(z)
-        output = self.softmax(z)
-        return output
+        z = self.relu(z)
+        output = self.fc_output(z)
+        probabilities = self.softmax(output)
+        return probabilities
         
 
 if __name__ == "__main__":
