@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from blocks import Shufflenet, Shuffle_Xception
 import pdb
 
@@ -247,6 +248,21 @@ class ShuffleNetV2_K_Shot(nn.Module):
                 nn.init.normal_(m.weight, 0, 0.01)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
+
+
+class MergeWeights(nn.Module):
+  def __init__(self, model1, model2):
+    super(MergeWeights, self).__init__()
+
+    self.model1 = model1
+    self.model2 = model2
+
+  def forward(self, x):
+    for p1, p2 in zip(self.model1.parameters.bias, self.model2.parameters()):
+      pdb.set_trace()
+      a = F.conv2d(x, p1 + p2)
+    return a
+
 
 class SimplexNet(nn.Module):
     def __init__(self, input_dim_arch, input_dim_channel, output_dim, hidden_dim=256):
