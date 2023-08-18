@@ -16,7 +16,7 @@ import logging
 import argparse
 import wandb
 import pdb
-from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, SimplexNet
+from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, MergeWeights, SimplexNet
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters, to_onehot
 from flops import get_cand_flops
 
@@ -145,7 +145,6 @@ def main():
         num_workers=1, pin_memory=use_gpu)
     val_dataprovider = DataIterator(val_loader)
 
-    pdb.set_trace()
 
     '''
     assert os.path.exists(args.train_dir)
@@ -177,57 +176,28 @@ def main():
     '''
     print('load data successfully')
 
-    model_list = []
-    args.optimizer = []
-    args.scheduler = []
-    if args.k == 1:
-      model = ShuffleNetV2_OneShot()
+    model1 = ShuffleNetV2_OneShot()
+    model2 = ShuffleNetV2_OneShot()
+    model = MergeWeights(model1, model2)
 
-      optimizer = torch.optim.SGD(get_parameters(model),
+    optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-
-      scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
-
-      args.optimizer = optimizer
-      args.scheduler = scheduler
-
-    else:
-      for i in range(args.k):
-        globals()["model" + str(i+1)] = ShuffleNetV2_OneShot()
-        model_list.append(globals()["model" + str(i+1)])
-
-        globals()["optimizer" + str(i+1)] = torch.optim.SGD(get_parameters( globals()["model" + str(i+1)]),
-                                lr=args.learning_rate,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
-
-        globals()["scheduler" + str(i+1)] = torch.optim.lr_scheduler.LambdaLR(globals()["optimizer" + str(i+1)],
-                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
-
-        args.optimizer.append(globals()["optimizer" + str(i+1)])
-        args.scheduler.append(globals()["scheduler" + str(i+1)])
-
-      model = ShuffleNetV2_K_Shot(model_list[0], model_list[1])
-      simplex_net = SimplexNet(4, 4, args.k)
-
     criterion_smooth = CrossEntropyLabelSmooth(1000, 0.1)
 
     if use_gpu:
         model = nn.DataParallel(model)
-        model_list[0] = nn.DataParallel(model_list[0])
-        model_list[1] = nn.DataParallel(model_list[1])
         loss_function = criterion_smooth.cuda()
         device = torch.device("cuda")
     else:
         loss_function = criterion_smooth
         device = torch.device("cpu")
 
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
+                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
+
     model = model.to(device)
-    model_list[0] = model_list[0].to(device)
-    model_list[1] = model_list[1].to(device)
 
     all_iters = 0
     if args.auto_continue:
@@ -240,8 +210,9 @@ def main():
             for i in range(iters):
                 scheduler.step()
 
-
+    args.optimizer = optimizer
     args.loss_function = loss_function
+    args.scheduler = scheduler
     args.train_dataprovider = train_dataprovider
     args.val_dataprovider = val_dataprovider
 
@@ -253,37 +224,29 @@ def main():
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, model_list, simplex_net, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, model1, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
-
-    wandb.finish()
 
 def adjust_bn_momentum(model, iters):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, model_list, simplex_net, device, args, *, val_interval, bn_process=False, all_iters=None):
-    
-    scheduler = args.scheduler
+def train(model, model1, device, args, *, val_interval, bn_process=False, all_iters=None):
+
     optimizer = args.optimizer
     loss_function = args.loss_function
+    scheduler = args.scheduler
     train_dataprovider = args.train_dataprovider
 
     t1 = time.time()
     Top1_err, Top5_err = 0.0, 0.0
-
-    model_list[0].train()
-    model_list[1].train()
+    model.train()
     for iters in range(1, val_interval + 1):
-        scheduler[0].step()
-        scheduler[1].step()
+        scheduler.step()
         if bn_process:
-            for model in model_list:
-              adjust_bn_momentum(model, iters)
-              adjust_bn_momentum(model_list[0], iters)
-              adjust_bn_momentum(model_list[1], iters)
+            adjust_bn_momentum(model, iters)
 
         all_iters += 1
         d_st = time.time()
@@ -306,38 +269,28 @@ def train(model, model_list, simplex_net, device, args, *, val_interval, bn_proc
                     return cand
             return get_random_cand()
 
-        output = model(data, get_uniform_sample_cand())
+        model1 = model1(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
+        output = model(data)
         loss = loss_function(output, target)
-        optimizer[0].zero_grad()
-        optimizer[1].zero_grad()
+        optimizer.zero_grad()
         loss.backward()
 
         for p in model.parameters():
             if p.grad is not None and p.grad.sum() == 0:
                 p.grad = None
 
-        optimizer[0].step()
-        optimizer[1].step()
+        optimizer.step()
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
-
+        
         Top1_err += 1 - prec1.item() / 100
         Top5_err += 1 - prec5.item() / 100
 
         if all_iters % args.display_interval == 0:
-            printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler[0].get_lr()[0], loss.item()) + \
+            printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler.get_lr()[0], loss.item()) + \
                         'Top-1 err = {:.6f},\t'.format(Top1_err / args.display_interval) + \
                         'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
                         'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
             logging.info(printInfo)
-
-            wandb.log({
-              "Top-1 train_err": Top1_err / args.display_interval,
-              "Top-5 train_err": Top5_err / args.display_interval,
-              "train_loss": loss.item(),
-              "lr": scheduler[0].get_lr()[0],
-              "train_iter": all_iters
-              })
-
             t1 = time.time()
             Top1_err, Top5_err = 0.0, 0.0
 
@@ -345,28 +298,6 @@ def train(model, model_list, simplex_net, device, args, *, val_interval, bn_proc
             save_checkpoint({
                 'state_dict': model.state_dict(),
                 }, all_iters)
-        
-        #---------------train simplex-net------------------#
-
-        archi = get_uniform_sample_cand()
-        archi_onehot = to_onehot(archi)
-
-        code = simplex_net(archi_onehot)
-        model = model()
-        loss = loss_function(output, target)
-        optimizer[0].zero_grad()
-        optimizer[1].zero_grad()
-        loss.backward()
-
-        for p in model.parameters():
-            if p.grad is not None and p.grad.sum() == 0:
-                p.grad = None
-
-        optimizer[0].step()
-        optimizer[1].step()
-
-
-
 
     return all_iters
 
@@ -402,14 +333,6 @@ def validate(model, device, args, *, all_iters=None):
               'val_time = {:.6f}'.format(time.time() - t1)
     logging.info(logInfo)
 
-    wandb.log({
-              "Top-1 val_err": 1 - top1.avg / 100,
-              "Top-5 val_err": 1 - top5.avg / 100,
-              "val_loss": objs.avg,
-              "val_iter": all_iters
-              })
-
 
 if __name__ == "__main__":
     main()
-
