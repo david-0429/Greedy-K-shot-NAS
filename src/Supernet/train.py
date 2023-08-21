@@ -16,7 +16,7 @@ import logging
 import argparse
 import wandb
 import pdb
-from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, MergeWeights, SimplexNet
+from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, MergeWeights, KshotModel, SimplexNet
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters, to_onehot
 from flops import get_cand_flops
 
@@ -178,7 +178,7 @@ def main():
 
     model1 = ShuffleNetV2_OneShot()
     model2 = ShuffleNetV2_OneShot()
-    model = MergeWeights(model1, model2)
+    model = KshotModel(model1, args.k)
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
@@ -224,7 +224,7 @@ def main():
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, model1, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
@@ -233,7 +233,7 @@ def adjust_bn_momentum(model, iters):
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, model1, device, args, *, val_interval, bn_process=False, all_iters=None):
+def train(model, device, args, *, val_interval, bn_process=False, all_iters=None):
 
     optimizer = args.optimizer
     loss_function = args.loss_function
@@ -269,8 +269,8 @@ def train(model, model1, device, args, *, val_interval, bn_process=False, all_it
                     return cand
             return get_random_cand()
 
-        model1 = model1(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
-        output = model(data)
+        #model1 = model1(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
+        output = model(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
         loss = loss_function(output, target)
         optimizer.zero_grad()
         loss.backward()
