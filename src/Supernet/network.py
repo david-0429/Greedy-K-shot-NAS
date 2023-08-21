@@ -264,6 +264,55 @@ class MergeWeights(nn.Module):
     return a
 
 
+class KshotModel(ShuffleNetV2_OneShot):
+    def __init__(self, Model, k):
+        super().__init__()
+
+        self.models = nn.ModuleList()
+        for _ in range(k):
+            self.models += [ShuffleNetV2_OneShot()]
+        self.weights = nn.Parameter(
+            torch.ones(k)
+        )
+
+    def merge_weights(self):
+        with torch.no_grad():
+            for params in zip(*[model.parameters() for model in self.models]):
+                weighted_sum = sum(w * p for w, p in zip(self.weights, params))
+                pdb.set_trace()
+                new_param = self.model.parameters()
+                new_param.copy_(weighted_sum)
+
+    def get_weights(self):
+        
+        weights = list(self.fc1.parameters)
+        weights += list(self.fc2.parameters)
+        weights += list(self.classifier.parameters)
+
+        return weights
+
+    def forward(self, x, architecture):
+
+        # merge_weight
+        self.merge_weights()
+
+        assert self.archLen == len(architecture)
+        
+        x = self.first_conv(x)
+
+        for archs, arch_id in zip(self.features, architecture):
+            x = archs[arch_id](x)
+
+        x = self.conv_last(x)
+
+        x = self.globalpool(x)
+
+        x = self.dropout(x)
+        x = x.contiguous().view(-1, self.stage_out_channels[-1])
+        x = self.classifier(x)
+        return x
+
+
 class SimplexNet(nn.Module):
     def __init__(self, input_dim_arch, input_dim_channel, output_dim, hidden_dim=256):
         super(SimplexNet, self).__init__()
