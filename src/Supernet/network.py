@@ -265,31 +265,23 @@ class MergeWeights(nn.Module):
 
 
 class KshotModel(ShuffleNetV2_OneShot):
-    def __init__(self, Model, k):
-        super().__init__()
-
+    def __init__(self, models, k):
+        super(KshotModel, self).__init__(input_size=32, n_class=10)
+        '''
         self.models = nn.ModuleList()
         for _ in range(k):
             self.models += [ShuffleNetV2_OneShot()]
-        self.weights = nn.Parameter(
+        '''
+        self.models = models
+        self.weight = nn.Parameter(
             torch.ones(k)
         )
 
     def merge_weights(self):
         with torch.no_grad():
             for params in zip(*[model.parameters() for model in self.models]):
-                weighted_sum = sum(w * p for w, p in zip(self.weights, params))
-                pdb.set_trace()
-                new_param = self.model.parameters()
-                new_param.copy_(weighted_sum)
-
-    def get_weights(self):
-        
-        weights = list(self.fc1.parameters)
-        weights += list(self.fc2.parameters)
-        weights += list(self.classifier.parameters)
-
-        return weights
+                weighted_sum = sum(w * p for w, p in zip(self.weight, params))
+                self.weights = weighted_sum
 
     def forward(self, x, architecture):
 
