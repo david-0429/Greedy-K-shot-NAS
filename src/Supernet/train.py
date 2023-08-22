@@ -176,9 +176,12 @@ def main():
     '''
     print('load data successfully')
 
-    model1 = ShuffleNetV2_OneShot()
-    model2 = ShuffleNetV2_OneShot()
-    model = KshotModel(model1, args.k)
+    #model1 = ShuffleNetV2_OneShot()
+    #model2 = ShuffleNetV2_OneShot()
+    models = nn.ModuleList()
+    for _ in range(args.k):
+      models += [ShuffleNetV2_OneShot()]
+    model = KshotModel(models, args.k)
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
