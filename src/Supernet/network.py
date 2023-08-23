@@ -279,7 +279,7 @@ class KshotModel(ShuffleNetV2_OneShot):
 
     def merge_weights(self):
         with torch.no_grad():
-            for model_p, models_p in zip(self.features.parameters(), *[self.models[i].features.parameters() for i in range(len(self.models))]):
+            for model_p, models_p in zip(self.features.parameters(), zip(*[self.models[i].features.parameters() for i in range(len(self.models))])):
                 pdb.set_trace()
                 weighted_sum = sum(w * p for w, p in zip(self.weight, models_p))
                 model_p.copy_(weighted_sum)
