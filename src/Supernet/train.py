@@ -16,9 +16,11 @@ import logging
 import argparse
 import wandb
 import pdb
+import matplotlib.pyplot as plt
 from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, MergeWeights, KshotModel, SimplexNet
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters, to_onehot
 from flops import get_cand_flops
+
 
 class OpencvResize(object):
 
@@ -76,15 +78,15 @@ def get_args():
     parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
     parser.add_argument('--label-smooth', type=float, default=0.1, help='label smoothing')
 
-    parser.add_argument('--k', type=int, default=2, help='number of supernet')
-
     parser.add_argument('--auto-continue', type=bool, default=True, help='report frequency')
     parser.add_argument('--display-interval', type=int, default=20, help='report frequency')
     parser.add_argument('--val-interval', type=int, default=10000, help='report frequency')
     parser.add_argument('--save-interval', type=int, default=10000, help='report frequency')
 
-    #parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
-    #parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
+    parser.add_argument('--k', type=int, default=2, help='k-supernet')
+
+    parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
+    parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
 
     args = parser.parse_args()
     return args
@@ -116,37 +118,9 @@ def main():
     wandb.init(
     # Set the project where this run will be logged
     project="Greedy K-shot NAS superent", 
-    name=f"CIFAR10_{args.batch_size}_{args.learning_rate}_{args.total_iters}_{get_timestamp()}"
+    name=f"ImagNet100_{args.batch_size}_{args.learning_rate}_{args.total_iters}_{get_timestamp()}"
     )
 
-    #dataset
-    train_transformer = transforms.Compose([
-            transforms.Resize((32, 32)),
-            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-            transforms.RandomHorizontalFlip(0.5),
-            transforms.ToTensor(),
-        ])
-    
-    val_transformer = transforms.Compose([
-            transforms.Resize((32, 32)),
-            transforms.ToTensor(),
-        ])
-
-    train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=train_transformer)
-    validation_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=val_transformer)
-
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=1, pin_memory=use_gpu)
-    train_dataprovider = DataIterator(train_loader)
-
-    val_loader = torch.utils.data.DataLoader(
-        dataset=validation_dataset, batch_size=200, shuffle=False, 
-        num_workers=1, pin_memory=use_gpu)
-    val_dataprovider = DataIterator(val_loader)
-
-
-    '''
     assert os.path.exists(args.train_dir)
     train_dataset = datasets.ImageFolder(
         args.train_dir,
@@ -173,21 +147,15 @@ def main():
         num_workers=1, pin_memory=use_gpu
     )
     val_dataprovider = DataIterator(val_loader)
-    '''
     print('load data successfully')
 
-    #model1 = ShuffleNetV2_OneShot()
-    #model2 = ShuffleNetV2_OneShot()
-    models = nn.ModuleList()
-    for _ in range(args.k):
-      models += [ShuffleNetV2_OneShot()]
-    model = KshotModel(models, args.k)
+    model = KshotModel(args.k)
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
-    criterion_smooth = CrossEntropyLabelSmooth(1000, 0.1)
+    criterion_smooth = CrossEntropyLabelSmooth(100, 0.1)
 
     if use_gpu:
         model = nn.DataParallel(model)
@@ -231,6 +199,8 @@ def main():
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
+    wandb.finish()
+    
 def adjust_bn_momentum(model, iters):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
@@ -272,8 +242,7 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
                     return cand
             return get_random_cand()
 
-        #model1 = model1(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
-        output = model(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
+        output = model(data, get_uniform_sample_cand())
         loss = loss_function(output, target)
         optimizer.zero_grad()
         loss.backward()
@@ -284,7 +253,7 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
 
         optimizer.step()
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
-        
+
         Top1_err += 1 - prec1.item() / 100
         Top5_err += 1 - prec5.item() / 100
 
@@ -294,6 +263,15 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
                         'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
                         'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
             logging.info(printInfo)
+
+            wandb.log({
+              "Top-1 train_err": Top1_err / args.display_interval,
+              "Top-5 train_err": Top5_err / args.display_interval,
+              "train_loss": loss.item(),
+              "lr": scheduler.get_lr()[0],
+              "train_iter": all_iters
+              })
+            
             t1 = time.time()
             Top1_err, Top5_err = 0.0, 0.0
 
@@ -336,6 +314,14 @@ def validate(model, device, args, *, all_iters=None):
               'val_time = {:.6f}'.format(time.time() - t1)
     logging.info(logInfo)
 
+    wandb.log({
+              "Top-1 val_err": 1 - top1.avg / 100,
+              "Top-5 val_err": 1 - top5.avg / 100,
+              "val_loss": objs.avg,
+              "val_iter": all_iters
+              })
+
 
 if __name__ == "__main__":
     main()
+
