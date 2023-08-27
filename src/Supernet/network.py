@@ -411,6 +411,7 @@ class KshotModel(ShuffleNetV2_OneShot):
         x = self.dropout(x)
         x = x.contiguous().view(-1, self.stage_out_channels[-1])
         x = self.classifier(x)
+        pdb.set_trace()
         
         return x
 
