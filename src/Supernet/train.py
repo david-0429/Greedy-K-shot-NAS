@@ -150,6 +150,7 @@ def main():
     print('load data successfully')
 
     model = KshotModel(args.k)
+    pdb.set_trace()
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
@@ -158,7 +159,7 @@ def main():
     criterion_smooth = CrossEntropyLabelSmooth(100, 0.1)
 
     if use_gpu:
-        model = nn.DataParallel(model)
+        #model = nn.DataParallel(model)
         loss_function = criterion_smooth.cuda()
         device = torch.device("cuda")
     else:
@@ -217,6 +218,7 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
     Top1_err, Top5_err = 0.0, 0.0
     model.train()
     for iters in range(1, val_interval + 1):
+        pdb.set_trace()
         scheduler.step()
         if bn_process:
             adjust_bn_momentum(model, iters)
@@ -242,7 +244,7 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
                     return cand
             return get_random_cand()
 
-        output = model(data, get_uniform_sample_cand())
+        output = model(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
         loss = loss_function(output, target)
         optimizer.zero_grad()
         loss.backward()
@@ -253,7 +255,7 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
 
         optimizer.step()
         prec1, prec5 = accuracy(output, target, topk=(1, 5))
-
+        pdb.set_trace()
         Top1_err += 1 - prec1.item() / 100
         Top5_err += 1 - prec5.item() / 100
 
