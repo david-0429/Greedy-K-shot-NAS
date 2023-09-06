@@ -17,7 +17,7 @@ import argparse
 import wandb
 import pdb
 import matplotlib.pyplot as plt
-from network import ShuffleNetV2_OneShot, ShuffleNetV2_K_Shot, MergeWeights, KshotModel, SimplexNet
+from Supernet.network.Kshot_network import KshotModel, SimplexNet
 from utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters, to_onehot
 from flops import get_cand_flops
 
@@ -72,7 +72,7 @@ def get_args():
     parser.add_argument('--eval-resume', type=str, default='./snet_detnas.pkl', help='path for eval model')
     parser.add_argument('--batch-size', type=int, default=1024, help='batch size')
     parser.add_argument('--total-iters', type=int, default=150000, help='total iters')
-    parser.add_argument('--learning-rate', type=float, default=0.5, help='init learning rate')
+    parser.add_argument('--learning-rate', type=float, default=0.12, help='init learning rate')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     parser.add_argument('--weight-decay', type=float, default=4e-5, help='weight decay')
     parser.add_argument('--save', type=str, default='./models', help='path for saving trained models')
@@ -80,13 +80,18 @@ def get_args():
 
     parser.add_argument('--auto-continue', type=bool, default=True, help='report frequency')
     parser.add_argument('--display-interval', type=int, default=20, help='report frequency')
-    parser.add_argument('--val-interval', type=int, default=10000, help='report frequency')
-    parser.add_argument('--save-interval', type=int, default=10000, help='report frequency')
-
+    parser.add_argument('--val-interval', type=int, default=10000, help='epchos')
+    parser.add_argument('--save-interval', type=int, default=1000, help='report frequency')
+    
+    #K-shot
     parser.add_argument('--k', type=int, default=2, help='k-supernet')
+    parser.add_argument('--m', type=int, default=16, help='m paths')
+    parser.add_argument('--warm-up', type=int, default=5, help='warm-up epochs')
 
     parser.add_argument('--train-dir', type=str, default='data/train', help='path to training dataset')
     parser.add_argument('--val-dir', type=str, default='data/val', help='path to validation dataset')
+    parser.add_argument('--data-num', type=int, default=1280000, help='Number of train Data: Imagenet-100 = 1280000')
+    
 
     args = parser.parse_args()
     return args
@@ -116,10 +121,28 @@ def main():
         return datetime.now().strftime("%b%d_%H-%M-%S")
   
     wandb.init(
-    # Set the project where this run will be logged
-    project="Greedy K-shot NAS superent", 
-    name=f"ImagNet100_{args.batch_size}_{args.learning_rate}_{args.total_iters}_{get_timestamp()}"
-    )
+      # Set the project where this run will be logged
+      project="Greedy K-shot NAS superent", 
+      name=f"CIFAR10_{args.batch_size}_{args.k}_{args.m}_{args.learning_rate}_{args.total_iters}_{get_timestamp()}",
+      config = {
+        "dataset": "ImageNet-100",
+        "Augmentation": "flip, ColorJitter",
+        "batch_size": args.batch_size,
+        "total_iters": args.total_iters,
+        "loss_fn": "CrossEntropyLabelSmooth",
+        "label-smooth": args.label_smooth,
+        "optimizer": "SGD",
+        "lr_name": "CosineAnnealingLR", 
+        "init_lr": args.learning_rate, 
+        "momentum": args.momentum, 
+        "weight_decay": args.weight_decay, 
+        "k": args.k,
+        "m": args.m,
+        "warm_up_epochs": args.warm_up, 
+        "use_gpu": use_gpu
+        }
+      )
+    #wandb.watch(model, loss_function, log="all")
 
     assert os.path.exists(args.train_dir)
     train_dataset = datasets.ImageFolder(
@@ -150,26 +173,36 @@ def main():
     print('load data successfully')
 
     model = KshotModel(args.k)
-    pdb.set_trace()
+    simplex_net = SimplexNet(4, args.k)
 
     optimizer = torch.optim.SGD(get_parameters(model),
                                 lr=args.learning_rate,
                                 momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+                                weight_decay=args.weight_decay,
+                                nesterov=True)
+    simpex_optimizer = torch.optim.SGD(get_parameters(simplex_net),
+                                lr=args.learning_rate,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay,
+                                nesterov=True)
     criterion_smooth = CrossEntropyLabelSmooth(100, 0.1)
 
     if use_gpu:
         #model = nn.DataParallel(model)
+        #simplex_net = nn.DataParallel(simplex_net)
         loss_function = criterion_smooth.cuda()
         device = torch.device("cuda")
     else:
         loss_function = criterion_smooth
         device = torch.device("cpu")
 
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer,
-                    lambda step : (1.0-step/args.total_iters) if step <= args.total_iters else 0, last_epoch=-1)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                    T_max=args.total_iters, last_epoch=-1)
+    simpex_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(simpex_optimizer,
+                    T_max=args.total_iters, last_epoch=-1)
 
     model = model.to(device)
+    simplex_net = simplex_net.to(device)
 
     all_iters = 0
     if args.auto_continue:
@@ -178,13 +211,16 @@ def main():
             all_iters = iters
             checkpoint = torch.load(lastest_model, map_location=None if use_gpu else 'cpu')
             model.load_state_dict(checkpoint['state_dict'], strict=True)
+            #simplex_net.load_state_dict(checkpoint['state_dict'], strict=True)
             print('load from checkpoint')
             for i in range(iters):
                 scheduler.step()
 
     args.optimizer = optimizer
+    args.simpex_optimizer = simpex_optimizer
     args.loss_function = loss_function
     args.scheduler = scheduler
+    args.simpex_scheduler = simpex_scheduler
     args.train_dataprovider = train_dataprovider
     args.val_dataprovider = val_dataprovider
 
@@ -192,46 +228,56 @@ def main():
         if args.eval_resume is not None:
             checkpoint = torch.load(args.eval_resume, map_location=None if use_gpu else 'cpu')
             model.load_state_dict(checkpoint, strict=True)
-            validate(model, device, args, all_iters=all_iters)
+            #simplex_net.load_state_dict(checkpoint, strict=True)
+            validate(model, simplex_net, device, args, all_iters=all_iters)
         exit(0)
 
     while all_iters < args.total_iters:
-        all_iters = train(model, device, args, val_interval=args.val_interval, bn_process=False, all_iters=all_iters)
+        all_iters = train(model, simplex_net, device, args, val_interval=args.data_num//args.batch_size, bn_process=False, all_iters=all_iters)
     # all_iters = train(model, device, args, val_interval=int(1280000/args.batch_size), bn_process=True, all_iters=all_iters)
     # save_checkpoint({'state_dict': model.state_dict(),}, args.total_iters, tag='bnps-')
 
+    #1 epoch : (args.count/args.batch_size)
+    #1 epoch = val_interval
     wandb.finish()
+    
     
 def adjust_bn_momentum(model, iters):
     for m in model.modules():
         if isinstance(m, nn.BatchNorm2d):
             m.momentum = 1 / iters
 
-def train(model, device, args, *, val_interval, bn_process=False, all_iters=None):
+def train(model, simplex_net, device, args, *, val_interval, bn_process=False, all_iters=None):
 
     optimizer = args.optimizer
+    simpex_optimizer = args.simpex_optimizer
     loss_function = args.loss_function
     scheduler = args.scheduler
+    simpex_scheduler = args.simpex_scheduler
     train_dataprovider = args.train_dataprovider
 
     t1 = time.time()
     Top1_err, Top5_err = 0.0, 0.0
     model.train()
+    simplex_net.train()
+
     for iters in range(1, val_interval + 1):
-        pdb.set_trace()
         scheduler.step()
+        simpex_scheduler.step()
         if bn_process:
             adjust_bn_momentum(model, iters)
 
         all_iters += 1
         d_st = time.time()
+        
         data, target = train_dataprovider.next()
         target = target.type(torch.LongTensor)
         data, target = data.to(device), target.to(device)
         data_time = time.time() - d_st
 
 
-        get_random_cand = lambda:tuple(np.random.randint(4) for i in range(20))
+        get_random_cand = lambda:tuple(np.random.randint(12) for i in range(20))
+        '''
         flops_l, flops_r, flops_step = 290, 360, 10
         bins = [[i, i+flops_step] for i in range(flops_l, flops_r, flops_step)]
 
@@ -243,39 +289,113 @@ def train(model, device, args, *, val_interval, bn_process=False, all_iters=None
                 if l*1e6 <= get_cand_flops(cand) <= r*1e6:
                     return cand
             return get_random_cand()
+        '''
+        def get_channel_factor():
+            channel_fac = [0.2, 0.4, 0.6, 0.8, 1.0]
+            idx = np.random.randint(len(channel_fac))
+            return channel_fac[idx]
 
-        output = model(data, (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2))
-        loss = loss_function(output, target)
-        optimizer.zero_grad()
-        loss.backward()
+#----------------K-shot Supernet Train------------------
 
-        for p in model.parameters():
-            if p.grad is not None and p.grad.sum() == 0:
-                p.grad = None
+        if all_iters <= (args.data_num/args.batch_size)*args.warm_up or all_iters % 2 == 0:
+            archi = (0, 1, 3, 2, 1, 0, 2, 2, 1, 2, 2, 3, 3, 3, 3, 3, 2, 1, 2, 2) #get_random_cand()
+            channel_fac = get_channel_factor()
 
-        optimizer.step()
-        prec1, prec5 = accuracy(output, target, topk=(1, 5))
-        pdb.set_trace()
-        Top1_err += 1 - prec1.item() / 100
-        Top5_err += 1 - prec5.item() / 100
+            if all_iters <= (args.data_num/args.batch_size)*args.warm_up:
+                lambdas = [[]]
+                [lambdas[0].append(1/args.k) for i in range(args.k)]
+            else:
+                archi_encode = to_onehot(archi)
+                archi_encode = archi_encode.to(device)
+                lambdas = simplex_net(archi_encode)
 
-        if all_iters % args.display_interval == 0:
-            printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler.get_lr()[0], loss.item()) + \
-                        'Top-1 err = {:.6f},\t'.format(Top1_err / args.display_interval) + \
-                        'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
-                        'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
-            logging.info(printInfo)
+            output = model(data, archi, channel_fac, lambdas)
+            loss = loss_function(output, target)
 
-            wandb.log({
-              "Top-1 train_err": Top1_err / args.display_interval,
-              "Top-5 train_err": Top5_err / args.display_interval,
-              "train_loss": loss.item(),
-              "lr": scheduler.get_lr()[0],
-              "train_iter": all_iters
-              })
+            optimizer.zero_grad()
+            loss.backward()
+
+            for p in model.parameters():
+                if p.grad is not None and p.grad.sum() == 0:
+                    p.grad = None
+
+            optimizer.step() #K-supernet trian
+            prec1, prec5 = accuracy(output, target, topk=(1, 5))
+
+            Top1_err += 1 - prec1.item() / 100
+            Top5_err += 1 - prec5.item() / 100
+
+            if all_iters % args.display_interval == 0:
+                printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler.get_lr()[0], loss.item()) + \
+                            'Top-1 err = {:.6f},\t'.format(Top1_err / args.display_interval) + \
+                            'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
+                            'lambda = {},\t'.format(lambdas[0]) + \
+                            'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
+                logging.info(printInfo)
+                
+                wandb.log({
+                    "Top-1 train_err": Top1_err / args.display_interval,
+                    "Top-5 train_err": Top5_err / args.display_interval,
+                    "train_loss": loss.item(),
+                    "lambdas": lambdas[0],
+                    "lr": scheduler.get_lr()[0],
+                    "train_iter": all_iters
+                    })
+                
+                t1 = time.time()
+                Top1_err, Top5_err = 0.0, 0.0
+        
+#----------------Simplex-net Train------------------
+        else:
+            data_chunk = torch.chunk(data, args.m, dim=0)
+            output_list = []
+
+            for i in range(args.m):
+                archi = get_uniform_sample_cand()
+                archi_encode = to_onehot(archi)
+                archi_encode = archi_encode.to(device)
+                lambdas = simplex_net(archi_encode)
+                channel_fac = get_channel_factor()
+
+                output_list.append(model(data_chunk[i], get_uniform_sample_cand(), channel_fac, lambdas))
+
+            output = torch.cat(output_list, dim=0)
+            loss = loss_function(output, target)
+
+            simpex_optimizer.zero_grad()
+            loss.backward()
+
+            for p in model.parameters():
+                if p.grad is not None and p.grad.sum() == 0:
+                    p.grad = None
+
+            simpex_optimizer.step() #Simplex-net train
+            prec1, prec5 = accuracy(output, target, topk=(1, 5))
             
-            t1 = time.time()
-            Top1_err, Top5_err = 0.0, 0.0
+            Top1_err += 1 - prec1.item() / 100
+            Top5_err += 1 - prec5.item() / 100
+            
+            if all_iters % args.display_interval == 0:
+                printInfo = 'TRAIN Iter {}: lr = {:.6f},\tloss = {:.6f},\t'.format(all_iters, scheduler.get_lr()[0], loss.item()) + \
+                            'Top-1 err = {:.6f},\t'.format(Top1_err / args.display_interval) + \
+                            'Top-5 err = {:.6f},\t'.format(Top5_err / args.display_interval) + \
+                            'lambda = {},\t'.format(lambdas[0]) + \
+                            'data_time = {:.6f},\ttrain_time = {:.6f}'.format(data_time, (time.time() - t1) / args.display_interval)
+                logging.info(printInfo)
+
+                wandb.log({
+                    "Top-1 train_err": Top1_err / args.display_interval,
+                    "Top-5 train_err": Top5_err / args.display_interval,
+                    "train_loss": loss.item(),
+                    "lambdas": lambdas[0],
+                    "lr": scheduler.get_lr()[0],
+                    "train_iter": all_iters
+                    })
+                 
+                t1 = time.time()
+                Top1_err, Top5_err = 0.0, 0.0
+        
+#--------------------------------------------------------
 
         if all_iters % args.save_interval == 0:
             save_checkpoint({
