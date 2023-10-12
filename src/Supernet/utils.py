@@ -2,6 +2,7 @@ import os
 import re
 import torch
 import torch.nn as nn
+import torch.nn.utils.prune as prune
 import pdb
 
 
@@ -41,7 +42,7 @@ class AvgrageMeter(object):
         self.avg = self.sum / self.cnt
 
 
-def accuracy(output, target, topk=(1,)):
+def accuracy(output, target, topk=(1,4)):
     maxk = max(topk)
     batch_size = target.size(0)
 
@@ -56,27 +57,28 @@ def accuracy(output, target, topk=(1,)):
     return res
 
 
-def save_checkpoint(state, iters, tag=''):
-    if not os.path.exists("./models"):
-        os.makedirs("./models")
+def save_checkpoint(state, iters, save="./experiment_0", tag=''):
+    if not os.path.exists(save):
+        os.makedirs("./model")
+        os.makedirs("./model")
     filename = os.path.join(
-        "./models/{}checkpoint-{:06}.pth.tar".format(tag, iters))
+        save + "/{}checkpoint-{:06}.pth.tar".format(tag, iters))
     torch.save(state, filename)
     latestfilename = os.path.join(
-        "./models/{}checkpoint-latest.pth.tar".format(tag))
+        save + "/{}checkpoint-latest.pth.tar".format(tag))
     torch.save(state, latestfilename)
 
 
-def get_lastest_model():
-    if not os.path.exists('./models'):
-        os.mkdir('./models')
-    model_list = os.listdir('./models/')
+def get_lastest_model(save="./models/experiment_0"):
+    if not os.path.exists(save):
+        os.mkdir("./models/experiment_0")
+    model_list = os.listdir(save)
     if model_list == []:
         return None, 0
     model_list.sort()
-    lastest_model = model_list[-1]
+    lastest_model = model_list[-2]
     iters = re.findall(r'\d+', lastest_model)
-    return './models/' + lastest_model, int(iters[0])
+    return save + "/" + lastest_model, int(iters[0])
 
 
 def get_parameters(model):
@@ -95,36 +97,31 @@ def get_parameters(model):
         params=group_no_weight_decay, weight_decay=0.)]
     return groups
 
-def to_onehot(a):
-  a_one_hot = torch.nn.functional.one_hot(torch.tensor(a), num_classes=4)
-  #c_one_hot = torch.nn.functional.one_hot(torch.tensor(c), num_classes=4)
+
+def to_onehot(a, c, a_choice, c_choice):
+  a_one_hot = torch.nn.functional.one_hot(torch.tensor(a), num_classes=a_choice)
+  c_one_hot = torch.nn.functional.one_hot(torch.tensor(c), num_classes=c_choice)
 
   a_one_hot = a_one_hot.to(torch.float32)
-  #c_one_hot = c_one_hot.to(torch.float32)
-  return a_one_hot
+  c_one_hot = c_one_hot.to(torch.float32)
+  return a_one_hot, c_one_hot
 
 
-'''
-def k_update(model_list, mode):
-  # 0 : model.train()
-  if mode == "0":
-    for i in range(len(model_list)):
-      return model_list[i].train()
-  # 1 : adjust_bn_momentum(model, iters)
-  elif mode == "1":
-    for model in model_list:
-      return adjust_bn_momentum(model, iters)
-  # 2 : scheduler.step()
-  elif mode == "2":
-    for i in range(len(model_list)):
-      pdb.set_trace()
-      return model_list[i].step()
-  # 3 : optimizer.zero_grad()
-  elif mode == "3":
-    for i in range(len(model_list)):
-      return model_list[i].zero_grad()
-  # 4 : optimizer.step()
-  elif mode == "4":
-    for i in range(len(model_list)):
-      return model_list[i].step()
-'''
+class PruningMethod(prune.BasePruningMethod):
+
+    PRUNING_TYPE = 'unstructured'
+
+    def __init__(self, n):
+        self.n = n
+
+    def compute_mask(self, t, default_mask):
+        mask = default_mask.clone()
+        mask[self.n:] = 0
+        return mask
+
+
+def Pruned_model(module, name, n):
+    PruningMethod.apply(module, name, n)
+    prune.remove(module, name)
+    return module
+
